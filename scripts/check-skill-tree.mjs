@@ -100,6 +100,7 @@ const MODEL_ID_PATTERNS = [
 ];
 
 const PORTED_PLAYBOOKS = new Set([
+	"edae",
 	"investigation",
 	"bug-fix",
 	"feature",
