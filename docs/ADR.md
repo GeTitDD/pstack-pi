@@ -382,3 +382,8 @@ the history. Every blob SHA is compared against the local one before a tree is b
 prints whether the remote tree matches the local tree. That comparison is the verification: a
 matching tree SHA means every path, byte, and file mode matches, because git is content addressed.
 The commit SHA differs by design, since a commit object hashes its committer and timestamp.
+
+Repeated pushes chain rather than replace. The script looks for the local commit whose tree
+equals the current remote head's tree and uses that remote commit as the parent, so history
+accumulates. It falls back to a root commit only on a first push or a divergence, where no
+local commit matches the remote tree.
