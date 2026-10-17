@@ -15,9 +15,11 @@
  * read YES.
  *
  * Two API details this handles. `POST /git/blobs` returns 409 on a repository with no commit, so
- * an empty repository is bootstrapped with one placeholder file first. The pushed commit is then
- * created with no parents, which makes the bootstrap commit unreachable rather than leaving it in
- * the history.
+ * an empty repository is bootstrapped with one placeholder file first. And the pushed commit is
+ * chained to the current remote head whenever that head's tree matches a commit in the local
+ * history, so repeated pushes accumulate history instead of replacing it. When no such commit
+ * exists, which is the first push and any divergence, the commit is created with no parents and
+ * the branch is moved onto it.
  *
  * The commit SHA differs from the local one by design: a commit object hashes its committer and
  * timestamp, which the API sets. The tree SHA is the content identity, and that is the line that
@@ -64,12 +66,35 @@ const ghRetry = (args, payload, attempts = 4) => {
 	}
 };
 
+/** The current remote head and its tree, or undefined on an empty repository. */
+const remoteHead = () => {
+	try {
+		const ref = JSON.parse(execFileSync("gh", ["api", `/repos/${repo}/git/ref/heads/${branch}`], { encoding: "utf8" }));
+		const commit = JSON.parse(
+			execFileSync("gh", ["api", `/repos/${repo}/git/commits/${ref.object.sha}`], { encoding: "utf8" }),
+		);
+		return { sha: ref.object.sha, tree: commit.tree.sha };
+	} catch {
+		return undefined;
+	}
+};
+
+/**
+ * The local commit whose tree equals the remote head's tree, if any. That commit is where the two
+ * histories line up, so it is the one the new remote commit should chain onto.
+ */
+const localCommitForTree = (treeSha) => {
+	if (!treeSha) return undefined;
+	for (const candidate of git("rev-list", "HEAD").split("\n").filter(Boolean)) {
+		if (git("rev-parse", `${candidate}^{tree}`).trim() === treeSha) return candidate;
+	}
+	return undefined;
+};
+
 // GitHub refuses git/blobs on a repository with no commit, so one file has to land first.
 const ensureNotEmpty = () => {
-	try {
-		execFileSync("gh", ["api", `/repos/${repo}/git/ref/heads/${branch}`], { encoding: "utf8", stdio: "pipe" });
-		return false;
-	} catch {
+	if (remoteHead()) return false;
+	{
 		execFileSync(
 			"gh",
 			[
@@ -92,6 +117,16 @@ const ensureNotEmpty = () => {
 
 const bootstrapped = ensureNotEmpty();
 if (bootstrapped) console.log("bootstrapped an empty repository with one commit");
+
+const head = remoteHead();
+const aligned = localCommitForTree(head?.tree);
+if (head) {
+	console.log(
+		aligned
+			? `chaining onto remote head ${head.sha.slice(0, 12)}, which matches local ${aligned.slice(0, 12)}`
+			: `remote head ${head.sha.slice(0, 12)} has no matching local commit, so this push starts a new root`,
+	);
+}
 
 const message = git("log", "-1", "--format=%B").trim();
 const localTree = git("rev-parse", "HEAD^{tree}").trim();
@@ -142,11 +177,10 @@ if (mismatched > 0) {
 const tree = ghRetry(["api", "--method", "POST", `/repos/${repo}/git/trees`], { tree: remote });
 console.log(`remote tree ${tree.sha}`);
 
-// A root commit keeps the pushed history identical to the local one.
 const commit = ghRetry(["api", "--method", "POST", `/repos/${repo}/git/commits`], {
 	message,
 	tree: tree.sha,
-	parents: [],
+	parents: head && aligned ? [head.sha] : [],
 });
 console.log(`remote commit ${commit.sha}`);
 
