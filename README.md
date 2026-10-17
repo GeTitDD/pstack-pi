@@ -6,17 +6,34 @@ This is a port of [pstack](https://github.com/cursor/plugins/tree/main/pstack) b
 
 ## install
 
+From the repository:
+
 ```bash
-pi install -l ./pstack-pi
+pi install git:github.com/GeTitDD/pstack-pi@main
 ```
 
-Then take the `subagents` block from `roles.example.json` into your settings, at user scope (`~/.pi/agent/settings.json`) or project scope (`.pi/settings.json`). That file also carries the `pstack` role map the ported skills read, keyed by pstack's own role names. No model id appears in any skill file, because ids are deployment policy.
+Or from a local checkout with `pi install -l ./pstack-pi`.
+
+Then run `setup-pstack` (or call the `pstack_models` tool with `action: "apply"`). It enumerates the models this machine can actually reach and writes the role map, refusing any id that does not resolve. `roles.example.json` is an example from one machine, not a recommendation.
+
+If you would rather edit settings by hand, take the `subagents` block from `roles.example.json` into your settings, at user scope (`~/.pi/agent/settings.json`) or project scope (`.pi/settings.json`). That file also carries the `pstack` role map the ported skills read, keyed by pstack's own role names. No model id appears in any skill file, because ids are deployment policy.
 
 For a review or design panel, seat two different providers. Two ids from one provider are one family; the file explains which providers are configured on this machine.
 
 Pi reads project package declarations only after project trust is granted, so pass `-a` for a headless project-scoped run.
 
 The port needs Node 22.19 or newer, which runs the `.ts` test files directly through type stripping.
+
+### pushing when github.com:443 is blocked
+
+`git push` needs `github.com:443`, and on some networks only `api.github.com` answers. The failure reads like an authentication error and is not one. `scripts/push-via-api.mjs` uploads the same commit over the REST Git Data API instead, comparing every blob SHA and printing whether the remote tree matches the local one.
+
+```bash
+git add -A && git commit -m "..."
+node scripts/push-via-api.mjs GeTitDD/pstack-pi main
+```
+
+It needs an authenticated `gh`. The pushed commit SHA differs from the local one because a commit object hashes its committer and timestamp; the tree SHA is the content identity and has to match.
 
 ## use it
 

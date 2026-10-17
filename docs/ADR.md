@@ -369,3 +369,16 @@ in another Cursor plugin. Nothing else was added beyond upstream.
   reports rather than invent one.
 - **Use a forge other than `gh`.** Upstream's playbooks are forge-conditional and fall back to `gh`
   when `origin` is absent, so they run unchanged here. The router states the deviation.
+
+### Publishing the repository
+
+`github.com:443` is unreachable from the machine this port was built on, while `api.github.com`
+answers, so `git push` cannot run and its failure reads like an authentication problem.
+`scripts/push-via-api.mjs` uploads the same commit through the REST Git Data API. Two API
+behaviours it has to work around: `POST /git/blobs` returns 409 on a repository with no commit, so
+an empty repository is bootstrapped with one placeholder file first; and the pushed commit is
+created with no parents, which makes that bootstrap commit unreachable instead of leaving it in
+the history. Every blob SHA is compared against the local one before a tree is built, and the run
+prints whether the remote tree matches the local tree. That comparison is the verification: a
+matching tree SHA means every path, byte, and file mode matches, because git is content addressed.
+The commit SHA differs by design, since a commit object hashes its committer and timestamp.
