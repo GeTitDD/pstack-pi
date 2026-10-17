@@ -1,0 +1,189 @@
+#!/usr/bin/env node
+/**
+ * watch-pr: report the forge's verdict for one PR, or poll until the verdict is terminal.
+ *
+ * The Babysit and Shipping playbooks call this instead of reading a list of green check marks,
+ * because a green check list is not a merge permission. This script answers one question, "does
+ * the forge agree this PR can merge", and never mutates anything.
+ *
+ *   watch-pr [<pr>] [--pretty] [--status-only] [--once] [--interval <seconds>]
+ *            [--queued-stack --stack-prs <bottom>]
+ *
+ * JSON by default, one object per evaluation. `--pretty` prints a human block. The bare command
+ * polls until a terminal verdict, which is the drive behaviour the playbooks expect; `--once`
+ * evaluates a single time, which is the check behaviour.
+ *
+ * Verdicts. MERGED means the forge recorded a merge. READY means mergeable right now. WAITING
+ * means pending checks or armed auto-merge. BLOCKED means a required check failed, the branch
+ * conflicts, or review requires action. CLOSED means closed without a merge, which is the only
+ * hard failure. `--status-only` trims the payload to the verdict fields.
+ */
+
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
+const run = promisify(execFile);
+const TERMINAL = new Set(["MERGED", "CLOSED"]);
+
+const argv = process.argv.slice(2);
+const flag = (name) => argv.includes(name);
+const value = (name, fallback) => {
+	const at = argv.indexOf(name);
+	return at === -1 ? fallback : argv[at + 1];
+};
+
+const pretty = flag("--pretty");
+const statusOnly = flag("--status-only");
+const once = flag("--once");
+const intervalSeconds = Number(value("--interval", "30"));
+const stackBottom = value("--stack-prs");
+const positional = argv.find((arg) => /^\d+$/.test(arg));
+
+const gh = async (args) => {
+	const { stdout } = await run("gh", args, { maxBuffer: 8 * 1024 * 1024 });
+	return stdout.trim();
+};
+
+const resolvePr = async () => {
+	if (positional) return positional;
+	const stdout = await gh(["pr", "view", "--json", "number", "--jq", ".number"]);
+	return stdout;
+};
+
+/** One PR's raw forge state, normalized to the fields the verdict needs. */
+const readPr = async (pr) => {
+	const stdout = await gh([
+		"pr",
+		"view",
+		String(pr),
+		"--json",
+		"number,state,mergedAt,mergeStateStatus,mergeable,reviewDecision,autoMergeRequest,statusCheckRollup,url,headRefOid",
+	]);
+	return JSON.parse(stdout);
+};
+
+/**
+ * A required check is a blocker only once it has concluded. A queued or in-progress check is
+ * pending, and treating it as failure is how a watcher ends up reporting a false negative.
+ */
+const checkVerdict = (rollup) => {
+	const checks = Array.isArray(rollup) ? rollup : [];
+	const failing = [];
+	const pending = [];
+	for (const check of checks) {
+		const name = check.name ?? check.context ?? "unnamed";
+		const state = String(check.conclusion ?? check.state ?? "").toUpperCase();
+		if (["FAILURE", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE"].includes(state)) failing.push(name);
+		else if (!["SUCCESS", "NEUTRAL", "SKIPPED"].includes(state)) pending.push(name);
+	}
+	return { failing, pending, total: checks.length };
+};
+
+const verdictOf = (pr) => {
+	const checks = checkVerdict(pr.statusCheckRollup);
+	const merged = Boolean(pr.mergedAt) || pr.state === "MERGED";
+	if (merged) return { verdict: "MERGED", reason: "the forge recorded a merge", checks };
+	if (pr.state === "CLOSED") return { verdict: "CLOSED", reason: "closed with no merge", checks };
+	const autoMerge = Boolean(pr.autoMergeRequest);
+	if (checks.failing.length > 0 && !autoMerge) {
+		return { verdict: "BLOCKED", reason: `required checks failed: ${checks.failing.join(", ")}`, checks };
+	}
+	if (["DIRTY", "UNSTABLE"].includes(pr.mergeStateStatus) && !autoMerge) {
+		return { verdict: "BLOCKED", reason: `merge state is ${pr.mergeStateStatus}`, checks };
+	}
+	if (pr.reviewDecision === "CHANGES_REQUESTED" && !autoMerge) {
+		return { verdict: "BLOCKED", reason: "a reviewer requested changes", checks };
+	}
+	if (checks.pending.length > 0 || pr.mergeStateStatus === "BLOCKED" || autoMerge) {
+		return {
+			verdict: "WAITING",
+			reason: autoMerge ? "auto-merge is armed" : `pending: ${checks.pending.slice(0, 6).join(", ") || pr.mergeStateStatus}`,
+			checks,
+		};
+	}
+	return { verdict: "READY", reason: "mergeable now", checks };
+};
+
+/** Unresolved review threads need GraphQL; `gh pr view` does not expose them. */
+const reviewThreads = async (pr) => {
+	const query = `query($owner:String!,$name:String!,$pr:Int!){repository(owner:$owner,name:$name){pullRequest(number:$pr){reviewThreads(first:100){nodes{isResolved path line comments(first:1){nodes{author{login} body}}}}}}}`;
+	try {
+		const repo = await gh(["repo", "view", "--json", "owner,name", "--jq", '.owner.login + " " + .name']);
+		const [owner, name] = repo.split(" ");
+		const stdout = await gh(["api", "graphql", "-f", `query=${query}`, "-F", `owner=${owner}`, "-F", `name=${name}`, "-F", `pr=${pr}`]);
+		const nodes = JSON.parse(stdout).data.repository.pullRequest.reviewThreads.nodes;
+		return nodes
+			.filter((thread) => !thread.isResolved)
+			.map((thread) => ({
+				path: thread.path,
+				line: thread.line,
+				author: thread.comments.nodes[0]?.author?.login ?? "unknown",
+				body: String(thread.comments.nodes[0]?.body ?? "").slice(0, 400),
+			}));
+	} catch {
+		// A missing scope or an older gh is not a verdict failure. Say so rather than guessing.
+		return null;
+	}
+};
+
+const evaluate = async (pr) => {
+	const raw = await readPr(pr);
+	const { verdict, reason, checks } = verdictOf(raw);
+	const threads = statusOnly ? null : await reviewThreads(pr);
+	const report = {
+		pr: raw.number,
+		url: raw.url,
+		head: raw.headRefOid,
+		state: raw.state,
+		merged: Boolean(raw.mergedAt),
+		mergedAt: raw.mergedAt,
+		mergeStateStatus: raw.mergeStateStatus,
+		reviewDecision: raw.reviewDecision,
+		autoMerge: Boolean(raw.autoMergeRequest),
+		verdict,
+		reason,
+		checks,
+		...(threads === null ? {} : { unresolvedReviewThreads: threads.length, reviewThreads: threads }),
+	};
+	return report;
+};
+
+const print = (report) => {
+	if (pretty) {
+		console.log(`PR #${report.pr}  ${report.verdict}  ${report.reason}`);
+		console.log(`  head ${report.head ?? "(unknown)"}`);
+		console.log(`  checks ${report.checks.total}, failing ${report.checks.failing.length}, pending ${report.checks.pending.length}`);
+		if (report.unresolvedReviewThreads) console.log(`  unresolved review threads ${report.unresolvedReviewThreads}`);
+		return;
+	}
+	console.log(JSON.stringify(report));
+};
+
+/** The stack bottom is the only PR that matters for a queued-stack wake; children follow it. */
+const stacked = async () => {
+	const bottom = stackBottom ?? (await resolvePr());
+	const report = await evaluate(bottom);
+	report.queuedStack = true;
+	report.stackBottom = Number(bottom);
+	print(report);
+	return TERMINAL.has(report.verdict);
+};
+
+const main = async () => {
+	if (flag("--queued-stack")) {
+		if (await stacked()) return;
+	} else {
+		const pr = await resolvePr();
+		for (;;) {
+			const report = await evaluate(pr);
+			print(report);
+			if (once || TERMINAL.has(report.verdict)) return;
+			await new Promise((resolve) => setTimeout(resolve, Math.max(5, intervalSeconds) * 1000));
+		}
+	}
+};
+
+main().catch((error) => {
+	console.error(`watch-pr: ${error.message}`);
+	process.exit(1);
+});

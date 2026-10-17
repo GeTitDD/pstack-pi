@@ -1,0 +1,4 @@
+{
+  "//": "The orchestrate bookkeeping CLI is TypeScript run directly by node, so it needs ESM and type stripping.",
+  "type": "module"
+}

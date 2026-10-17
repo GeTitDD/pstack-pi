@@ -1,0 +1,5 @@
+# pi writes local project settings and session state here
+.pi/
+node_modules/
+*.log
+.DS_Store

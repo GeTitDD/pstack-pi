@@ -1,0 +1,49 @@
+{
+  "//": "pstack per-role model choices. Deployment policy, not workflow documentation, which is why no model id appears in any skill file.",
+  "//how": "Take the `subagents` block into ~/.pi/agent/settings.json (user) or .pi/settings.json (project). Delete a line to fall back to the packet's default. Overrides are keyed by agent name, so the port's own agents take their role model here: `pstack-scout` is the `how explorer` seat and `poteto-agent` is every code delegate.",
+  "//families": "A review or design panel needs two different model families, because same-family seats produce agreement that measures nothing. On this machine the two native families are `deepseek` and `zai-coding-cn`, so a cross-family panel needs no external CLI at all.",
+  "//external": "The external CLI agents (`codex-exec`, `claude-code`) are an alternative second family, but pi-subagents refuses a `.CMD` batch wrapper on Windows and the `codex` and `claude` entries on PATH are wrappers. Override `runner.command` to an absolute `.exe` path if you want that route.",
+  "subagents": {
+    "agentOverrides": {
+      "worker": {
+        "model": "deepseek/deepseek-flash"
+      },
+      "reviewer": {
+        "model": "zai-coding-cn/glm-5.3"
+      },
+      "oracle": {
+        "model": "zai-coding-cn/glm-5.3"
+      },
+      "delegate": {
+        "model": "deepseek/deepseek-flash"
+      },
+      "pstack-scout": {
+        "model": "deepseek/deepseek-flash"
+      },
+      "poteto-agent": {
+        "model": "deepseek/deepseek-flash"
+      }
+    }
+  },
+  "pstack": {
+    "//": "Role lines read by the ported skills. The names match pstack's pstack-models.mdc roles so the ported skill text stays close to the original.",
+    "budget": "large (xhigh)",
+    "feature, refactoring": "deepseek/deepseek-flash",
+    "bug-fix": "deepseek/deepseek-flash",
+    "judgment and prose": "zai-coding-cn/glm-5.3",
+    "hardest tasks": "deepseek/deepseek-v4-pro",
+    "how explorer": "deepseek/deepseek-flash",
+    "how explainer": "zai-coding-cn/glm-5.3",
+    "why investigators": "deepseek/deepseek-flash",
+    "why synthesizer": "zai-coding-cn/glm-5.3",
+    "arena runners": "deepseek/deepseek-flash, zai-coding-cn/glm-5.3",
+    "arena cross-judge pool": "zai-coding-cn/glm-5.3, deepseek/deepseek-v4-pro",
+    "swarm workers": "deepseek/deepseek-flash",
+    "architect runners": "deepseek/deepseek-v4-pro, zai-coding-cn/glm-5.3",
+    "interrogate reviewers": "deepseek/deepseek-flash, zai-coding-cn/glm-5.3",
+    "perf-issue": "deepseek/deepseek-flash",
+    "hillclimb": "deepseek/deepseek-v4-pro",
+    "reflect tooling": "deepseek/deepseek-flash",
+    "reflect judgment, divergent, synthesizer": "zai-coding-cn/glm-5.3"
+  }
+}

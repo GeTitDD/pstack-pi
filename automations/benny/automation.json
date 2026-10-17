@@ -1,0 +1,28 @@
+{
+  "pack": "benny",
+  "description": "Two automations over one issue channel: triage every report, then reproduce the confirmed ones and prepare a draft fix.",
+  "source": {
+    "kind": "issue channel",
+    "note": "The channel adapter is external. When none is configured, the automations still run on their schedule and must say they have no new reports rather than inventing one."
+  },
+  "automations": [
+    {
+      "name": "triage",
+      "workflow": "workflows/triage.js",
+      "skill": "skills/triage-issue-reports/SKILL.md",
+      "prompt": "templates/triage-automation-prompt.md",
+      "every": "15m",
+      "args": { "config": "<repo-relative config path>" },
+      "effects": ["reads the issue channel", "posts one thread-only verdict"]
+    },
+    {
+      "name": "reproduce",
+      "workflow": "workflows/reproduce.js",
+      "skill": "skills/reproduce-and-fix-issues/SKILL.md",
+      "prompt": "templates/reproduce-automation-prompt.md",
+      "every": "1h",
+      "args": { "config": "<repo-relative config path>" },
+      "effects": ["drives the configured app-control adapter", "opens a draft PR at most"]
+    }
+  ]
+}

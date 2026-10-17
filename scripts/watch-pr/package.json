@@ -1,0 +1,4 @@
+{
+  "//": "The watcher is a bare executable, so ESM needs the package type declared here.",
+  "type": "module"
+}
